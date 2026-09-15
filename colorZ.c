@@ -847,19 +847,44 @@ url_span_len(const char *text, int len, int pos)
 {
     int start = pos;
     pos++;
+    int paren_depth = 0;
     while (pos < len)
     {
         int seqlen = match_control_seq(text, len, pos);
         if (seqlen > 0)
             break;
         char c = text[pos];
+        if (c == '(')
+        {
+            /* Parenthese ouvrante appartenant potentiellement a l'URL
+             * elle-meme (ex: nom de fichier "...(3).pdf") : on ne coupe
+             * pas dessus, on se contente de suivre la profondeur pour
+             * savoir si une ')' plus loin lui correspond. */
+            paren_depth++;
+            pos++;
+            continue;
+        }
+        if (c == ')')
+        {
+            if (paren_depth > 0)
+            {
+                /* Cette parenthese fermante correspond a une ouvrante
+                 * rencontree dans l'URL : elle en fait partie. */
+                paren_depth--;
+                pos++;
+                continue;
+            }
+            /* Parenthese fermante non appariee : c'est celle qui entoure
+             * l'URL dans le texte (ex: "(voir https://exemple.com)"). */
+            break;
+        }
         if (c == ' ' || c == '\t' || c == '\n' || c == '\r' ||
-            c == ')' || c == '"' || c == ']' || c == '}' || c == '>' ||
+            c == '"' || c == ']' || c == '}' || c == '>' ||
             c == '\x0E' || c == '\x0F')
             break;
         if ((c == '.' || c == ',') && pos + 1 < len &&
             (text[pos + 1] == ' ' || text[pos + 1] == '\t' || text[pos + 1] == '\n' ||
-             text[pos + 1] == ')' || text[pos + 1] == '"'))
+             (text[pos + 1] == ')' && paren_depth == 0) || text[pos + 1] == '"'))
             break;
         pos++;
     }
@@ -878,6 +903,7 @@ colorize_links_in_text(const char *text, const char *link_color_name,
     dstr_init(&out);
     int pos = 0;
     int in_url = 0;
+    int url_paren_depth = 0;
     int links_bold = links_bold_enabled();
     int links_italic = links_italic_enabled();
     int links_underline = links_underline_enabled();
@@ -927,6 +953,7 @@ colorize_links_in_text(const char *text, const char *link_color_name,
             if (is_url(text + pos, remaining))
             {
                 in_url = 1;
+                url_paren_depth = 0;
                 url_ambient = markers ? last_color_before(text, pos, markers) : NULL;
                 emit_color(&out, markers, default_color);
                 emit_color(&out, markers, link_color);
@@ -947,6 +974,25 @@ colorize_links_in_text(const char *text, const char *link_color_name,
             const char *cur_restore = markers
                 ? (url_ambient ? url_ambient : restore)
                 : (ambient_len > 0 ? ambient_buf : restore);
+            if (c == '(')
+            {
+                /* Parenthese ouvrante appartenant potentiellement a l'URL
+                 * elle-meme (ex: nom de fichier "...(3).pdf") : elle fait
+                 * partie du lien, on avance simplement la profondeur. */
+                url_paren_depth++;
+                dstr_append_char(&out, c);
+                pos++;
+                continue;
+            }
+            if (c == ')' && url_paren_depth > 0)
+            {
+                /* Cette parenthese fermante correspond a une ouvrante
+                 * rencontree dans l'URL : elle en fait partie. */
+                url_paren_depth--;
+                dstr_append_char(&out, c);
+                pos++;
+                continue;
+            }
             if (c == ' ' || c == '\t' || c == '\n' || c == '\r' ||
                 c == ')' || c == '"' || c == ']' || c == '}' || c == '>' ||
                 c == '\x0E' || c == '\x0F')
@@ -965,7 +1011,7 @@ colorize_links_in_text(const char *text, const char *link_color_name,
             }
             if ((c == '.' || c == ',') && pos + 1 < len &&
                 (text[pos + 1] == ' ' || text[pos + 1] == '\t' || text[pos + 1] == '\n' ||
-                 text[pos + 1] == ')' || text[pos + 1] == '"'))
+                 (text[pos + 1] == ')' && url_paren_depth == 0) || text[pos + 1] == '"'))
             {
                 emit_color(&out, markers, cur_restore);
                 if (links_bold)
